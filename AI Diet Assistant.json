@@ -1,0 +1,571 @@
+{
+  "name": "AI Diet Assistant",
+  "nodes": [
+    {
+      "parameters": {
+        "public": true,
+        "initialMessages": "Halo! 👋\nNamaku Nathan, Asisten AI Diet kamu. Kirim foto makananmu dan aku perkirakan kalori & nutrisinya 🍽️📷, atau tanya apa saja soal kebiasaan sehat.",
+        "options": {
+          "allowFileUploads": true,
+          "allowedFilesMimeTypes": "image/*",
+          "loadPreviousSession": "notSupported",
+          "subtitle": "Pendamping kebiasaan sehat dan evaluasi mingguan",
+          "title": "AI Diet Assistant",
+          "responseMode": "lastNode"
+        }
+      },
+      "id": "931d7a83-bd97-4a8c-b1e0-2a07503c7279",
+      "name": "Chat Trigger",
+      "type": "@n8n/n8n-nodes-langchain.chatTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        -336,
+        -32
+      ],
+      "webhookId": "f03978fa-fd38-4d5d-a14a-fcfc2e76e653"
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1STvCpDtk84PxGABC5fD7XCxObHKpHsOf-BOuS2Q0stY",
+          "mode": "list",
+          "cachedResultName": "AI Diet Assistant Database",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1STvCpDtk84PxGABC5fD7XCxObHKpHsOf-BOuS2Q0stY/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Chat_History",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1STvCpDtk84PxGABC5fD7XCxObHKpHsOf-BOuS2Q0stY/edit#gid=0"
+        },
+        "options": {}
+      },
+      "id": "03d1dbdb-6625-4484-9d29-07136398d269",
+      "name": "Read Chat History (Google Sheets)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        160,
+        -32
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "HiIZeCHWK3Lq2Prw",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const rows = $input.all().map(item => item.json);\n\nconst now = Date.now();\nconst sevenDays = 7 * 24 * 60 * 60 * 1000;\nconst MAX_MESSAGES = 40; // batasi supaya prompt tidak membengkak\n\nfunction getTime(value) {\n  if (typeof value !== 'string' || !value.trim()) return NaN;\n  const normalized = value.trim().replace(/([+-]\\d{2}):(\\d{2})$/, '$1$2');\n  return Date.parse(normalized);\n}\n\nconst weeklyRows = rows\n  .filter(row => row.message && row.timestamp)\n  .filter(row => {\n    const time = getTime(row.timestamp);\n    return Number.isFinite(time) && time <= now && now - time <= sevenDays;\n  })\n  .sort((a, b) => getTime(a.timestamp) - getTime(b.timestamp))\n  .slice(-MAX_MESSAGES);\n\nconst trigger = $('Chat Trigger').first();\nconst binary = trigger.binary || {};\n\n// hanya ambil file bertipe gambar\nconst imageBinary = {};\nfor (const [key, file] of Object.entries(binary)) {\n  if (file && typeof file.mimeType === 'string' && file.mimeType.startsWith('image/')) {\n    imageBinary[key] = file;\n  }\n}\nconst hasImage = Object.keys(imageBinary).length > 0;\n\nlet chatInput = (trigger.json.chatInput || '').toString().trim();\nif (!chatInput && hasImage) {\n  chatInput = 'Tolong analisis foto makanan ini: apa saja isinya, perkiraan kalori, protein, karbohidrat, dan lemaknya.';\n}\nif (!chatInput) {\n  chatInput = 'Halo';\n}\n\nconst history = weeklyRows.map(row => `${row.role}: ${row.message}`).join('\\n');\n\nconst result = {\n  json: {\n    sessionId: 'ibu-profile-1',\n    chatInput,\n    hasImage,\n    jumlahChatMingguIni: weeklyRows.length,\n    history: history || 'Belum ada riwayat chat dalam 7 hari terakhir.'\n  }\n};\nif (hasImage) result.binary = imageBinary;\nreturn [result];"
+      },
+      "id": "a528d467-2751-4aa9-8ae6-ef8b95d21727",
+      "name": "Build Context from Sheet",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        400,
+        -32
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.chatInput }}",
+        "options": {
+          "systemMessage": "=Kamu adalah AI Diet Assistant bernama Nathan yang mendampingi kebiasaan sehat dan evaluasi mingguan, bukan dokter atau pengganti ahli gizi. Gunakan riwayat percakapan di bawah sebagai konteks, tetapi jangan mengarang data yang tidak tersedia.\n\nRIWAYAT CHAT 7 HARI TERAKHIR (dari Google Sheets):\n{{ $json.history }}\n\nANALISIS FOTO MAKANAN\nJika pengguna melampirkan foto makanan atau minuman, lakukan ini:\n1. Sebutkan item yang terlihat dan perkiraan porsinya (gram/ml atau ukuran umum, misalnya 1 centong nasi, 1 butir telur).\n2. Buat tabel markdown berisi estimasi per item: kalori (kkal), protein (g), karbohidrat (g), lemak (g). Tambahkan serat, gula, atau natrium jika bisa diperkirakan.\n3. Berikan rentang, bukan angka pasti (misalnya 450-550 kkal), dan sebutkan asumsi yang dipakai (minyak goreng, santan, gula, saus, dan sejenisnya yang tidak terlihat).\n4. Tutup dengan satu baris: \"Total estimasi: X-Y kkal | Protein ~A g | Karbo ~B g | Lemak ~C g\".\n5. Beri penilaian singkat keseimbangan menu dan 1-2 saran praktis yang realistis, tanpa menghakimi.\n6. Jika pengguna menyebut porsi atau bahan, pakai informasi itu di atas tebakan dari foto.\n7. Jika foto buram, gelap, bukan makanan, atau isinya tidak bisa dikenali, katakan terus terang dan minta foto yang lebih jelas atau deskripsi porsinya. Jangan mengarang.\n8. Ingatkan singkat bahwa angka hanyalah perkiraan dari foto.\nJika pengguna bertanya total kalori hari ini atau minggu ini, hitung hanya dari analisis yang benar-benar tercatat di riwayat dan jelaskan bila ada makan yang belum tercatat.\n\nPENGINGAT / JADWAL HARIAN (Google Calendar)\nWaktu sekarang: {{ $now.toFormat(\"cccc, dd LLLL yyyy HH:mm\") }} (zona waktu {{ $now.zoneName }}).\nKamu punya empat tool Google Calendar: Buat, Lihat, Ubah, Hapus Pengingat. Pengingat dipakai sebagai alarm notifikasi HP.\nAturan:\n1. Semua judul diawali \"[Diet]\", contoh \"[Diet] Minum air\". Event tanpa awalan itu bukan milikmu, jangan diubah atau dihapus.\n2. Pengingat bersifat berulang. Harian: RRULE:FREQ=DAILY. Hari kerja: RRULE:FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR. Mulai dari hari ini (atau besok bila jamnya sudah lewat). Durasi 15 menit.\n3. Sebelum membuat, panggil Lihat Pengingat dengan kata kunci \"[Diet]\" agar tidak membuat duplikat. Jika sudah ada, tawarkan untuk mengubahnya.\n4. Untuk mengubah atau menghapus: panggil Lihat Pengingat dulu untuk mendapat ID event. Saat mengubah, isi semua field dengan nilai lengkap (nilai lama bila tidak berubah). Minta konfirmasi singkat sebelum menghapus.\n5. Jika pengguna minta \"jadwal default\" atau belum menyebut jam, usulkan dulu daftar ini dan tunggu persetujuan sebelum membuat: Sarapan 07:00, Minum air 10:00, Makan siang 12:30, Camilan sehat 15:30, Minum air 17:00, Makan malam 18:30, Tidur 22:00.\n6. Setelah selesai, ringkas pengingat yang dibuat/diubah/dihapus dalam daftar singkat (judul + jam + berulang).\n7. Jika tool gagal, katakan terus terang dan jangan mengaku berhasil.\n\nPANDUAN UMUM\nGunakan bahasa Indonesia yang ramah dan mudah dipahami. Bantu membuat pilihan makan seimbang, aktivitas yang wajar, tidur, hidrasi, dan kebiasaan yang realistis. Hindari daftar larangan makanan mutlak atau target penurunan berat badan ekstrem. Jangan mendiagnosis atau memberi instruksi medis. Jika pengguna menyebut penyakit, obat, kehamilan, gejala mengkhawatirkan, atau riwayat gangguan makan, sarankan konsultasi dengan dokter/ahli gizi. Bila data penting belum ada, tanyakan seperlunya. Saat update mingguan, bandingkan hanya data yang benar-benar tercatat, jelaskan ketidakpastian, dan berikan fokus kebiasaan untuk minggu berikutnya. Jangan meminta data pribadi yang tidak diperlukan.",
+          "maxIterations": 20,
+          "passthroughBinaryImages": true
+        }
+      },
+      "id": "46af0fa5-5c4f-48f0-8205-41fcc1a9a4ab",
+      "name": "AI Diet Assistant",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        624,
+        -32
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1STvCpDtk84PxGABC5fD7XCxObHKpHsOf-BOuS2Q0stY",
+          "mode": "list",
+          "cachedResultName": "AI Diet Assistant Database",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1STvCpDtk84PxGABC5fD7XCxObHKpHsOf-BOuS2Q0stY/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Chat_History",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1STvCpDtk84PxGABC5fD7XCxObHKpHsOf-BOuS2Q0stY/edit#gid=0"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "timestamp": "={{ $now.toISO() }}",
+            "session_id": "ibu-profile-1",
+            "role": "assistant",
+            "message": "={{ $('AI Diet Assistant').first().json.output || 'Maaf, jawaban AI belum tersedia. Silakan coba lagi.' }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "timestamp",
+              "displayName": "timestamp",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "session_id",
+              "displayName": "session_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "role",
+              "displayName": "role",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "message",
+              "displayName": "message",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "94cd6c89-9a2c-4b63-8e9f-cbce4ab413b5",
+      "name": "Save AI Reply to Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        944,
+        -32
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "HiIZeCHWK3Lq2Prw",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1STvCpDtk84PxGABC5fD7XCxObHKpHsOf-BOuS2Q0stY",
+          "mode": "list",
+          "cachedResultName": "AI Diet Assistant Database",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1STvCpDtk84PxGABC5fD7XCxObHKpHsOf-BOuS2Q0stY/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Chat_History",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1STvCpDtk84PxGABC5fD7XCxObHKpHsOf-BOuS2Q0stY/edit#gid=0"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "timestamp": "={{ $now.toISO() }}",
+            "session_id": "ibu-profile-1",
+            "role": "user",
+            "message": "={{ ($('Chat Trigger').first().json.chatInput || '') + (Object.keys($('Chat Trigger').first().binary || {}).length ? ' [📷 foto makanan dilampirkan]' : '') }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "timestamp",
+              "displayName": "timestamp",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "session_id",
+              "displayName": "session_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "role",
+              "displayName": "role",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "message",
+              "displayName": "message",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "ce7bad0f-d38a-4526-91b6-513123cfafb4",
+      "name": "Save User Message to Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        -80,
+        -32
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "HiIZeCHWK3Lq2Prw",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "SETUP CHECKLIST\n1) Tab Google Sheets 'Chat_History' dengan header: timestamp | session_id | role | message\n2) Pilih kredensial Google Sheets di ketiga node Sheets.\n3) Node 'Gemini Chat Model': kredensial Google Gemini(PaLM) dengan API key gratis dari aistudio.google.com/apikey.\n4) Empat node 'Calendar - ...': pilih kredensial Google Calendar OAuth2 (sama untuk keempatnya). Kolom Calendar sudah 'primary' (kalender utama).\n5) Workflow Settings > Timezone sudah Asia/Jakarta (WIB). Ubah bila di WITA/WIT.\n6) Uji: teks biasa, foto makanan, lalu 'buatkan jadwal default'.\n\nPengingat muncul sebagai notifikasi Google Calendar di HP, bukan alarm jam.\n\nPENTING: Prototipe satu pengguna (session_id 'ibu-profile-1'). Jangan bagikan link chat publik untuk data pribadi sebelum ada kontrol akses.",
+        "height": 520,
+        "width": 390,
+        "color": 5
+      },
+      "id": "e7629e63-a875-41d5-a905-9b9293a1df67",
+      "name": "READ ME - Setup",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1392,
+        128
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const out = $('AI Diet Assistant').first().json.output;\nconst answer = (typeof out === 'string' && out.trim())\n  ? out\n  : 'Maaf, jawaban AI belum tersedia. Silakan coba kirim ulang pesan atau fotonya.';\nreturn [{ json: { output: answer } }];"
+      },
+      "id": "69fa090e-046f-4718-b403-060cd888912b",
+      "name": "Return AI Answer to Chat",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1136,
+        -32
+      ]
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-3.1-flash-lite",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        624,
+        128
+      ],
+      "id": "77bd012a-030a-4307-adf2-a14a5be96f82",
+      "name": "Gemini Chat Model",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "eVTmvHsArG9bmXn9",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "descriptionType": "manual",
+        "toolDescription": "Membuat pengingat BERULANG di Google Calendar (muncul sebagai notifikasi HP). Judul wajib diawali [Diet].",
+        "calendar": {
+          "__rl": true,
+          "mode": "list",
+          "value": "primary"
+        },
+        "start": "={{ $fromAI('waktu_mulai', 'Waktu mulai pengingat, format ISO 8601 tanpa zona, contoh 2026-10-27T07:00:00', 'string') }}",
+        "end": "={{ $fromAI('waktu_selesai', 'Waktu selesai = waktu mulai + 15 menit, format ISO 8601, contoh 2026-10-27T07:15:00', 'string') }}",
+        "additionalFields": {
+          "description": "={{ $fromAI('catatan', 'Catatan singkat isi pengingat', 'string', 'Dibuat oleh AI Diet Assistant') }}",
+          "rrule": "={{ $fromAI('aturan_ulang', 'Aturan pengulangan tanpa awalan RRULE. Harian: FREQ=DAILY. Hari kerja: FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR', 'string', 'FREQ=DAILY') }}",
+          "summary": "={{ $fromAI('judul', 'Judul pengingat, selalu diawali [Diet], contoh: [Diet] Minum air', 'string') }}"
+        }
+      },
+      "type": "n8n-nodes-base.googleCalendarTool",
+      "typeVersion": 1.3,
+      "position": [
+        480,
+        432
+      ],
+      "id": "e3a151b9-d709-40a5-b077-e770703636d1",
+      "name": "Calendar - Buat Pengingat",
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "vlk0WKwr58tzd9ZC",
+          "name": "Google Calendar account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "descriptionType": "manual",
+        "toolDescription": "Melihat daftar pengingat di Google Calendar beserta ID event-nya. Gunakan kata kunci [Diet]. Wajib dipakai sebelum mengubah atau menghapus.",
+        "operation": "getAll",
+        "calendar": {
+          "__rl": true,
+          "mode": "list",
+          "value": "primary"
+        },
+        "options": {
+          "query": "={{ $fromAI('kata_kunci', 'Kata kunci judul. Pakai [Diet] untuk melihat semua pengingat diet', 'string', '[Diet]') }}"
+        }
+      },
+      "type": "n8n-nodes-base.googleCalendarTool",
+      "typeVersion": 1.3,
+      "position": [
+        704,
+        432
+      ],
+      "id": "ba72391a-4558-49d5-ad99-82bd29dc7119",
+      "name": "Calendar - Lihat Pengingat",
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "vlk0WKwr58tzd9ZC",
+          "name": "Google Calendar account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "descriptionType": "manual",
+        "toolDescription": "Mengubah pengingat yang sudah ada. Selalu isi SEMUA field dengan nilai lengkap (nilai lama bila tidak berubah). Butuh ID event dari Lihat Pengingat.",
+        "operation": "update",
+        "calendar": {
+          "__rl": true,
+          "mode": "list",
+          "value": "primary"
+        },
+        "eventId": "={{ $fromAI('id_event', 'ID event dari hasil Lihat Pengingat', 'string') }}",
+        "updateFields": {
+          "end": "={{ $fromAI('waktu_selesai', 'Waktu selesai ISO 8601 (isi nilai lama bila tidak diubah)', 'string') }}",
+          "rrule": "={{ $fromAI('aturan_ulang', 'Aturan RRULE lengkap (isi nilai lama bila tidak diubah), contoh RRULE:FREQ=DAILY', 'string', 'RRULE:FREQ=DAILY') }}",
+          "start": "={{ $fromAI('waktu_mulai', 'Waktu mulai ISO 8601 (isi nilai lama bila tidak diubah)', 'string') }}",
+          "summary": "={{ $fromAI('judul', 'Judul lengkap, diawali [Diet] (isi nilai lama bila tidak diubah)', 'string') }}"
+        }
+      },
+      "type": "n8n-nodes-base.googleCalendarTool",
+      "typeVersion": 1.3,
+      "position": [
+        928,
+        432
+      ],
+      "id": "25b07833-6e59-40db-aec1-e1c4d9c4fc9c",
+      "name": "Calendar - Ubah Pengingat",
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "vlk0WKwr58tzd9ZC",
+          "name": "Google Calendar account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "descriptionType": "manual",
+        "toolDescription": "Menghapus pengingat dari Google Calendar. Hanya setelah pengguna mengonfirmasi.",
+        "operation": "delete",
+        "calendar": {
+          "__rl": true,
+          "mode": "list",
+          "value": "primary"
+        },
+        "eventId": "={{ $fromAI('id_event', 'ID event dari hasil Lihat Pengingat', 'string') }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleCalendarTool",
+      "typeVersion": 1.3,
+      "position": [
+        1152,
+        432
+      ],
+      "id": "ac887b52-20f7-47e1-8090-2b09e788ea35",
+      "name": "Calendar - Hapus Pengingat",
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "vlk0WKwr58tzd9ZC",
+          "name": "Google Calendar account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Chat Trigger": {
+      "main": [
+        [
+          {
+            "node": "Save User Message to Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Chat History (Google Sheets)": {
+      "main": [
+        [
+          {
+            "node": "Build Context from Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Context from Sheet": {
+      "main": [
+        [
+          {
+            "node": "AI Diet Assistant",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Diet Assistant": {
+      "main": [
+        [
+          {
+            "node": "Save AI Reply to Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save AI Reply to Sheets": {
+      "main": [
+        [
+          {
+            "node": "Return AI Answer to Chat",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save User Message to Sheets": {
+      "main": [
+        [
+          {
+            "node": "Read Chat History (Google Sheets)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Diet Assistant",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calendar - Buat Pengingat": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Diet Assistant",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calendar - Lihat Pengingat": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Diet Assistant",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calendar - Ubah Pengingat": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Diet Assistant",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calendar - Hapus Pengingat": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Diet Assistant",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "e6d91e68-32d9-4cf7-88ab-3a28ef518c02",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "dc96f10ae7dc95d3c138575ba243a0a167923dbcb524841d451aadf9135d5fb3"
+  },
+  "nodeGroups": [],
+  "id": "xB5b2FR71Jvqicm9",
+  "tags": []
+}
